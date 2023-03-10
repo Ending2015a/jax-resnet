@@ -1,6 +1,7 @@
 from functools import partial
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple, Any, Dict, Mapping
 
+import numpy as np
 import jax.numpy as jnp
 from flax import linen as nn
 
@@ -171,6 +172,59 @@ class ResNeStBottleneckBlock(ResNetBottleneckBlock):
         return self.activation(y + skip_cls(self.strides)(x, y.shape))
 
 
+class ResNetSequential(nn.Module):
+    layers: Sequence[Callable[..., Any]]
+    output_layers: Sequence[int]
+
+    def __call__(self, *args, **kwargs):
+        if not self.layers:
+            raise ValueError(f'Empty Sequential module {self.name}.')
+        
+        outputs = self.layers[0](*args, **kwargs)
+        layer_outputs = [outputs]
+        for layer in self.layers[1:]:
+            if isinstance(outputs, tuple):
+                outputs = layer(*outputs)
+            elif isinstance(outputs, Dict):
+                outputs = layer(**outputs)
+            else:
+                outputs = layer(outputs)
+            layer_outputs.append(outputs)
+        
+        return outputs, [layer_outputs[i] for i in self.output_layers]
+
+def slice_resnet(
+    model: ResNetSequential,
+    start: int = 0,
+    end: Optional[int] = None
+) -> ResNetSequential:
+
+    last_ind = len(model.layers) - 1
+    if end is None:
+        end = last_ind + 1
+    elif end < 0:
+        end += last_ind + 1
+
+    sliced_layers = [model.layers[i] for i in range(start, end)]
+    sliced_output_layers = [
+        layer_idx - start
+        for layer_idx in model.output_layers
+        if layer_idx >= start and layer_idx < end
+    ]
+    return ResNetSequential(sliced_layers, sliced_output_layers)
+
+
+def slice_model_and_variables(
+    model: ResNetSequential,
+    variables: Mapping[str, Any],
+    start: int = 0,
+    end: Optional[int] = None
+) -> ResNetSequential:
+    from .common import slice_variables
+    sliced_model = slice_resnet(model, start, end)
+    sliced_variables = slice_variables(variables, start, end)
+    return sliced_model, sliced_variables
+
 def ResNet(
     block_cls: ModuleDef,
     *,
@@ -185,6 +239,7 @@ def ResNet(
                                 window_shape=(3, 3),
                                 strides=(2, 2),
                                 padding=((1, 1), (1, 1))),
+    output_stages: Sequence[int] = []
 ) -> nn.Sequential:
     conv_block_cls = partial(conv_block_cls, conv_cls=conv_cls, norm_cls=norm_cls)
     stem_cls = partial(stem_cls, conv_block_cls=conv_block_cls)
@@ -199,7 +254,16 @@ def ResNet(
 
     layers.append(partial(jnp.mean, axis=(1, 2)))  # global average pool
     layers.append(nn.Dense(n_classes))
-    return nn.Sequential(layers)
+
+    # calculate output stages
+    stages_to_layers = np.cumsum(np.append(1, stage_sizes))
+
+    output_layers = []
+    for i in output_stages:
+        assert i > 0 and i <= len(stages_to_layers)
+        output_layers.append(stages_to_layers[i-1])
+
+    return ResNetSequential(layers, output_layers)
 
 
 # yapf: disable

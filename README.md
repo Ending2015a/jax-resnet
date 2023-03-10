@@ -2,10 +2,18 @@
 
 ![Build & Tests](https://github.com/n2cholas/jax-resnet/workflows/Build%20and%20Tests/badge.svg)
 
+### Note that this is a FORKED from the original repo [n2cholas/jax-resnet](https://github.com/n2cholas/jax-resnet).
+
+
 A Flax (Linen) implementation of ResNet (He et al. 2015), Wide ResNet
 (Zagoruyko & Komodakis 2016), ResNeXt (Xie et al. 2017), ResNet-D (He et al.
 2020), and ResNeSt (Zhang et al. 2020). The code is modular so you can mix and
 match the various stem, residual, and bottleneck implementations.
+
+
+
+## Changes
+More utilities for transfer learning. See [Transfer Learning](#transfer-learning).
 
 ## Installation
 
@@ -69,6 +77,57 @@ The `slice_variables` function (found in in
 [`common.py`](https://github.com/n2cholas/jax-resnet/blob/main/jax_resnet/common.py))
 allows you to extract the corresponding subset of the variables dict. Check out
 that docstring for more information.
+
+#### More Utilities
+
+Retrieving the intermediate outputs from each stage of ResNet. This feature is usually used for building feature pyramid networks for object detection model.
+```python
+from jax_resnet import pretrained_resnet
+ResNet50, variables = pretrained_resnet(50)
+model = ResNet50(output_stages=[3, 4, 5])
+
+print(model.output_layers) # 8, 14, 17
+
+out, (out3, out4, out5) = model.apply(
+    variables,
+    jnp.ones((32, 224, 224, 3)),
+    mutable=False
+)
+```
+![](https://miro.medium.com/v2/resize:fit:4800/format:webp/1*hEU7S-EiVqcmtAlj6kgfRA.png)
+ResNet50 borrowrd from [Towards Data Science](https://towardsdatascience.com/understanding-and-coding-a-resnet-in-keras-446d7ff84d33)
+
+Slicing ResNet and variables.
+```python
+from jax_resnet import pretrained_resnet, slice_resnet_and_variables
+
+ResNet50, variables = pretrained_resnet(50)
+model = ResNet50(output_stages=[3, 4, 5])
+sliced_resnet, sliced_variables = slice_resnet_and_variables(
+        model, variables, start=0, end=-2)
+
+out, (out3, out4, out5) = sliced_resnet.apply(
+    sliced_variables,
+    # You can pass arbitrary size of input
+    jnp.ones((32, 480, 640, 3)),
+    mutable=False
+)
+print(out3.shape, out4.shape, out5.shape)
+```
+Note that the stage number you specified in `output_stages` will be discarded if the corresponding stage is sliced. For example:
+```python
+start = model.output_layers[0]+1   # 9
+sliced_resnet, sliced_variables = slice_resnet_and_variables(
+        model, variables, start=start, end=-2)
+
+# out3 has been sliced out
+out, (out4, out5) = sliced_resnet.apply(
+    sliced_variables,
+    jnp.ones((32, 480, 640, 3)),
+    mutable=False
+)
+```
+
 
 ## Checkpoint Accuracies
 
